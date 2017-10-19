@@ -75,9 +75,25 @@ class SelectorBIC(ModelSelector):
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        best_score = None
+        best_model = None
+        logN = math.log(len(self.sequences))
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                model = self.base_model(n)
+                if not best_model:
+                    best_model = model
+                score =  -2 * model.score(self.X, self.lengths) + (n ** 2 + 2 * n * model.n_features - 1) * logN
+            except Exception:
+                continue
+            else:
+                if not best_score:
+                    best_score = score
+                if score < best_score:
+                    best_score = score
+                    best_model = model
+        return best_model
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
 
 
 class SelectorDIC(ModelSelector):
@@ -93,8 +109,25 @@ class SelectorDIC(ModelSelector):
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        best_score = None
+        best_model = None
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                model = self.base_model(n)
+                if not best_model:
+                    best_model = model
+                score = model.score(self.X, self.lengths) - \
+                        1 / (len(self.hwords) - 1) * sum([model.score(*v) for k, v in self.hwords.items()
+                                                          if k != self.this_word])
+            except Exception:
+                continue
+            else:
+                if not best_score:
+                    best_score = score
+                if score > best_score:
+                    best_score = score
+                    best_model = model
+        return best_model
 
 
 class SelectorCV(ModelSelector):
@@ -104,6 +137,27 @@ class SelectorCV(ModelSelector):
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        split = min([5, len(self.sequences)])
+        best_n = self.n_constant
+        if split > 1:
+            split_method = KFold(n_splits=split)
+            best_score = float('-inf')
+            for n in range(self.min_n_components, self.max_n_components + 1):
+                scores = []
+                try:
+                    for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                        train_X, train_lengths = combine_sequences(cv_train_idx, self.sequences)
+                        test_X, test_lengths = combine_sequences(cv_test_idx, self.sequences)
+                        hmm_model = GaussianHMM(n_components=n, covariance_type="diag", n_iter=1000,
+                                                random_state=self.random_state,
+                                                verbose=False).fit(train_X, train_lengths)
+                        scores.append(hmm_model.score(test_X, test_lengths))
+                except Exception:
+                    continue
+                else:
+                    score_avg = sum(scores)/len(scores)
+                    if score_avg > best_score:
+                        best_score = score_avg
+                    best_n = n
+        return GaussianHMM(n_components=best_n, covariance_type="diag", n_iter=1000,
+                                        random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
